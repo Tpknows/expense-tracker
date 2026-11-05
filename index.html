@@ -1,0 +1,527 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>EasyPC Expense Log</title>
+<script src="https://alcdn.msauth.net/browser/2.38.3/js/msal-browser.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="ob-form.js"></script>
+<script src="liquidation.js"></script>
+<style>
+:root{--bg:#f4f6f2;--card:#fff;--tx:#0b0b0b;--mut:#5f6b5a;--pri:#62B134;--bd:#d9e2d3}
+@media(prefers-color-scheme:dark){:root{--bg:#0b0b0b;--card:#161a14;--tx:#f2f5ef;--mut:#9aa595;--bd:#2b3327}}
+*{box-sizing:border-box}
+body{margin:0;font-family:system-ui,Segoe UI,Arial,sans-serif;background:var(--bg);color:var(--tx);padding:16px}
+.card{max-width:480px;margin:0 auto;background:var(--card);border:1px solid var(--bd);border-radius:14px;padding:20px}
+h1{font-size:20px;margin:0 0 4px;user-select:none;-webkit-user-select:none}.sub{color:var(--mut);font-size:13px;margin-bottom:16px}
+label{display:block;font-size:13px;font-weight:600;margin:12px 0 4px}
+input,select,textarea,button{width:100%;font:inherit;padding:10px;border-radius:8px;border:1px solid var(--bd);background:var(--bg);color:var(--tx)}
+button{background:var(--pri);color:#fff;border:0;font-weight:700;margin-top:18px;cursor:pointer}
+button:disabled{opacity:.5}button.ghost{background:transparent;color:var(--mut);border:1px solid var(--bd);margin-top:8px}
+.tag{display:inline-block;padding:3px 10px;border-radius:99px;font-size:12px;font-weight:700;background:var(--bd);margin-top:6px}
+#msg{margin-top:14px;font-size:14px;white-space:pre-wrap}.err{color:#dc2626}.ok{color:#3f8a1c}
+#app{display:none}
+.row{display:flex;gap:8px;align-items:flex-start;padding:8px 0;border-bottom:1px solid var(--bd);font-size:13px;font-weight:400;margin:0;color:var(--tx)}
+.row input{width:auto;margin-top:2px}.row a{color:var(--pri)}
+</style>
+</head>
+<body>
+<div class="card">
+  <h1>EasyPC Expense Log</h1>
+  <div class="sub">Petty Cash (below ₱1,000) o Reimbursement (₱1,000 pataas)</div>
+
+  <div id="login"><button id="btnLogin">Sign in with EasyPC email</button></div>
+
+  <div id="app">
+    <div class="sub" id="who"></div>
+    <label>Petsa ng expense</label><input type="date" id="date">
+    <label>Type</label><select id="type"></select>
+    <label>Particular</label><select id="part"></select>
+    <div id="travel" style="display:none">
+      <label>From (saan galing)</label><input id="from" placeholder="Hal: Office">
+      <label>To (saan pupunta)</label><input id="to" placeholder="Hal: TPT (Touchpoint)">
+      <label>Sakay</label><select id="ride"></select>
+      <div class="sub" style="margin:14px 0 0">Para sa OB Travel Form. Naaalala ito ng app, kaya isang beses mo lang ito ifi-fill.</div>
+      <label>Employee ID</label><input id="obId">
+      <label>Department</label><input id="obDept">
+      <label>Immediate Superior</label><input id="obSup">
+      <label>Department Head</label><input id="obHead">
+    </div>
+    <label>Branch (kung para sa branch)</label><select id="branch"></select>
+    <label>Amount (₱)</label><input type="number" id="amt" min="1" step="0.01" inputmode="decimal">
+    <div id="kind" class="tag">—</div>
+    <label>Description</label><textarea id="desc" rows="2" placeholder="Hal: Grab papuntang TPT (Touchpoint) para sa shoot"></textarea>
+    <label>Receipt / Reference no. (optional)</label><input id="ref" placeholder="OR no., invoice no., o Grab trip ID">
+    <label>Proof (resibo, screenshot o PDF)</label><input type="file" id="file" accept="image/*,application/pdf">
+    <button id="submit">Submit</button>
+    <button class="ghost" id="btnOut">Sign out</button>
+  </div>
+  <div id="approver" style="display:none">
+    <hr style="border:0;border-top:1px solid var(--bd);margin:18px 0">
+    <div style="font-size:15px;font-weight:700">Para sa approval</div>
+    <label>Fund</label><select id="apFund"></select>
+    <div id="apList" class="sub" style="margin:10px 0 0"></div>
+    <button id="apApprove">Approve at gawin ang liquidation ZIP</button>
+    <button class="ghost" id="apReject">Reject ang mga naka-check</button>
+  </div>
+  <div id="admin" style="display:none">
+    <hr style="border:0;border-top:1px solid var(--bd);margin:18px 0">
+    <div style="font-size:15px;font-weight:700">Admin: Approver emails</div>
+    <label>Petty Cash approver</label><input id="apPetty" type="email" placeholder="name@easypc.com.ph">
+    <label>Reimbursement approver</label><input id="apReimb" type="email" placeholder="name@easypc.com.ph">
+    <button id="apSave">Save</button>
+    <button class="ghost" id="apHide">Hide</button>
+  </div>
+  <div id="msg"></div>
+</div>
+
+<script>
+/* ====== CONFIG: palitan ang may PASTE ====== */
+const CFG = {
+  CLIENT_ID: "PASTE-AZURE-APP-CLIENT-ID",
+  TENANT_ID: "PASTE-EASYPC-TENANT-ID",
+  /* Resibo at log: OneDrive ni Tammy > TP EXPENSE CONTENTS > TAMMY RECEIPTS > {YYYY} > {MONTH} */
+  DRIVE_ID: "b!vNMe2pX-5EKYEGK0-pohGNCqCo4nh8hOrJHaf1obLl75Mqf13x2jSbpTxzMvMPEj",
+  PROOF_ROOT: "TP EXPENSE CONTENTS/TAMMY RECEIPTS",
+  MONTH_FOLDERS: ["JAN","FEB","MAR","APR","MAY","JUN","JULY","AUG","SEPT","OCT","NOV","DEC"], // pareho sa 2026 folders
+  WORKBOOK_PATH: "TP EXPENSE CONTENTS/TAMMY RECEIPTS/expense-log.xlsx",
+  TABLES: {"All":"AllExpenses","Petty Cash":"PettyCash","Reimbursement":"Reimbursement","Settings":"Settings","People":"OBPeople"}, // Table bawat tab sa Excel
+  OB_FOLDER: "OB TRAVEL FORMS", // nasa loob ng month folder, hal. 2026/NOV/OB TRAVEL FORMS
+  /* Creatives Income and Expense Tracker (OneDrive ni Mark Peter), tab na "Content team Expenses" */
+  TRACKER: {
+    DRIVE_ID: "b!mMkMXElOWkCnoi82-EEYD9CqCo4nh8hOrJHaf1obLl75Mqf13x2jSbpTxzMvMPEj",
+    ITEM_ID: "01QHEN5ZDY3WAUIJK4FNFLWDYGR4SM4VLW",
+    SHEET: "Content team Expenses",
+    URL: "https://easypcph-my.sharepoint.com/:x:/r/personal/markpeter_cruz_easypc_com_ph/_layouts/15/doc2.aspx?sourcedoc=%7B4481DD78-5C25-4A2B-BB0F-068F24CE5576%7D&file=Creatives%20Income%20and%20Expense%20Tracker.xlsx&action=default",
+    DIVISION: "Core Service",
+    DEPARTMENT: "Creatives",
+    REMARKS: "NOT YET"
+  },
+  NEW_STATUS: "For Reimbursement", // Status ng bagong row sa tracker
+  STATUS: {PENDING:"Pending Approval",APPROVED:"For Processing",REJECTED:"Rejected"}, // Status sa log; ang Paid ay mano-mano
+  TRACKER_STATUS: {APPROVED:"For Processing",REJECTED:"Rejected"}, // ipapalit sa Status ng tracker pag in-approve o ni-reject
+  THRESHOLDS: {"Petty Cash":5000,"Reimbursement":10000}, // total ng Pending Approval ng lahat ng staff sa log
+  PETTY_LIMIT: 1000,
+  ADMIN_EMAIL: "PASTE-ADMIN-EMAIL@easypc.com.ph" // ikaw lang ang may access sa hidden admin panel
+};
+/* Galing sa glossary tab ng tracker, dagdag ang Employee Welfare at Gadget na gamit na sa data */
+const TYPES=["Employee Welfare","Representation","Subscriptions","Training Expense","Equipment Purchase","KOL Collaboration","Xdeal Support","Production Cost","Ad Boosting","Store Visit Allowance","Reward/Incentive","Meal","Office Supplies"];
+const PARTICULARS=["Travel/Transportation","Meal","Software","Internet","For Content Team","For Studio","Team Building","Utensils","Gadget","Payment","Boosting","Incentive/Reward","Store Visit","Production","Giveaway Fulfillment","Others"];
+/* Pang-OB Travel Form: dito binabasa ng generator kung Grab/Taxi, Moto-Taxi, Public Transport, Gasoline o Toll ang kategorya */
+const TRAVEL="Travel/Transportation";
+const RIDES=["Grab/Taxi","Angkas/JoyRide/Move It","Jeep/Bus/Train/Trike","Gas","Toll/Parking"];
+const BRANCHES=[["","Wala / Office"],["MKN","Marikina"],["MND","Mandaluyong"],["OASIS","Oasis"],["ALA","Alabang"],["MKT","Makati"],["BAC","Bacoor"],["MON","Monumento"],["TPT","Touchpoint"],["FVW","Fairview"],["MNL","Manila"],["MLS","Malolos"],["SUCAT","Sucat"],["ALS","Angeles"],["SFN","San Fernando"],["BWG","Baliwag"]];
+/* Columns ng AllExpenses, PettyCash, Reimbursement (huwag baguhin ang order):
+   Timestamp | Name | Email | Date | Fund | Type | Particular | Branch | Amount | Description | Proof | ExpenseID | FileHash | RefNo | ApproverEmail | TrackerNo | From | To | Ride | OBForm | ProofItemId | Status | Batch
+   OBPeople tab: Email | NameOnForm | EmployeeID | Department | ImmediateSuperior | DepartmentHead */
+const C={name:1,email:2,date:3,fund:4,type:5,part:6,amt:8,desc:9,proof:10,id:11,hash:12,ref:13,trk:15,from:16,to:17,ride:18,proofId:20,status:21,batch:22};
+let profile=null; // {index, values} ng OBPeople row ng naka-login
+/* Columns A–P ng tracker; chine-check bago magsulat para hindi tumama sa maling column */
+const TRACKER_HEAD=["Expense No.","Date","Type","Particular","Amount","Source of Fund","Link to Reference","Division","Department","Status","DESCRIPTION","Creative","number","BUDGET MONTH","REMARKS","YEAR"];
+
+const msal = new msalBrowser.PublicClientApplication({
+  auth:{clientId:CFG.CLIENT_ID,authority:"https://login.microsoftonline.com/"+CFG.TENANT_ID,redirectUri:location.origin},
+  cache:{cacheLocation:"sessionStorage"}
+});
+const SCOPES=["User.Read","Files.ReadWrite.All","Mail.Send"];
+const $=id=>document.getElementById(id);
+let account=null;
+
+function say(t,c){const m=$("msg");m.textContent=t;m.className=c||""}
+const kindOf=a=>a<CFG.PETTY_LIMIT?"Petty Cash":"Reimbursement";
+const fill=(id,list)=>{$(id).innerHTML="";list.forEach(o=>{const [v,t]=Array.isArray(o)?o:[o,o];$(id).add(new Option(t,v))})};
+
+/* Redirect login, kasi madalas ma-block ang popup sa phone */
+async function token(){
+  const r={scopes:SCOPES,account};
+  try{return (await msal.acquireTokenSilent(r)).accessToken}
+  catch{await msal.acquireTokenRedirect(r);throw new Error("Nire-refresh ang login...")}
+}
+async function graph(path,opt={}){
+  const t=await token();
+  const res=await fetch("https://graph.microsoft.com/v1.0"+path,{...opt,headers:{Authorization:"Bearer "+t,...(opt.headers||{})}});
+  if(!res.ok)throw new Error("Graph "+res.status+": "+(await res.text()).slice(0,200));
+  return res.status===204?null:res.json().catch(()=>null);
+}
+const json=(method,body)=>({method,headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
+
+async function init(){
+  fill("type",TYPES);fill("part",PARTICULARS);fill("branch",BRANCHES);fill("ride",RIDES);
+  $("part").onchange=()=>{$("travel").style.display=$("part").value===TRAVEL?"block":"none"};$("part").onchange();
+  await msal.initialize();
+  const r=await msal.handleRedirectPromise().catch(e=>{say(e.message,"err");return null});
+  account=r?.account||msal.getAllAccounts()[0]||null;
+  if(account)showApp();
+}
+/* Local na petsa (Manila), hindi UTC, para hindi kahapon ang lumalabas tuwing umaga */
+const today=()=>{const d=new Date();return new Date(d-d.getTimezoneOffset()*6e4).toISOString().slice(0,10)};
+function showApp(){
+  $("login").style.display="none";$("app").style.display="block";
+  $("who").textContent="Naka-login: "+account.name+" ("+account.username+")";
+  $("date").value=today();
+  loadProfile();
+  loadApprover();
+}
+/* OB info ng naka-login (Employee ID, Department, Superior, Head), galing sa OBPeople tab */
+async function loadProfile(){
+  $("obDept").value=CFG.TRACKER.DEPARTMENT;
+  try{
+    const d=await graph(tUrl(CFG.TABLES.People)+"?$top=500");
+    const i=d.value.findIndex(r=>String(r.values[0][0]).trim().toLowerCase()===account.username.toLowerCase());
+    if(i<0)return;
+    profile={index:i,values:d.value[i].values[0]};
+    const v=profile.values;
+    $("obId").value=v[2]||"";$("obDept").value=v[3]||CFG.TRACKER.DEPARTMENT;$("obSup").value=v[4]||"";$("obHead").value=v[5]||"";
+  }catch(e){}
+}
+async function saveProfile(p){
+  const row=[account.username.toLowerCase(),p.name,p.id,p.department,p.superior,p.head];
+  if(profile&&row.every((x,i)=>String(profile.values[i]??"")===String(x)))return;
+  if(profile)await graph(tUrl(CFG.TABLES.People)+"/itemAt(index="+profile.index+")",json("PATCH",{values:[row]}));
+  else await addRow(CFG.TABLES.People,row);
+  profile={index:profile?profile.index:-1,values:row};
+  if(profile.index<0)loadProfile();
+}
+/* Isang OB Travel Form bawat araw bawat tao. Binubuo ulit tuwing may bagong ride sa araw na iyon, kaya laging kumpleto */
+async function makeOBForm(rows,email,date,person){
+  const [y,m,d]=date.split("-").map(Number);
+  const legs=rows.filter(v=>String(v[C.email]).toLowerCase()===email.toLowerCase()&&isoDate(v[C.date])===date&&v[C.part]===TRAVEL)
+    .map(v=>({date:{y,m,d},amount:num(v[C.amt]),remarks:String(v[C.desc]),from:String(v[C.from]),to:String(v[C.to]),
+      category:OBGen.guessCategory(String(v[C.ride])),claimant:person.name}));
+  const forms=OBGen.groupForms(legs,person.name);
+  if(forms[0].legs.length>OBGen.MAX_LEGS)throw new Error("Lampas "+OBGen.MAX_LEGS+" rides na sa araw na ito, hindi na kasya sa isang OB form.");
+  const bytes=await OBGen.buildWorkbook(JSZip,OBGen.templateBytes(),forms,{[forms[0].claimantKey]:person});
+  const fname=`OB Travel Form - ${person.name.replace(/[\\/:*?"<>|]/g,"")} - ${OBGen.longDate({y,m,d})}.xlsx`;
+  const path=`${CFG.PROOF_ROOT}/${y}/${CFG.MONTH_FOLDERS[m-1]}/${CFG.OB_FOLDER}/${fname}`;
+  const up=await graph(`/drives/${CFG.DRIVE_ID}/root:/${enc(path)}:/content`,
+    {method:"PUT",headers:{"Content-Type":"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"},body:bytes});
+  return {url:up.webUrl,fname,rides:forms[0].legs.length,total:forms[0].total};
+}
+$("btnLogin").onclick=()=>msal.loginRedirect({scopes:SCOPES}).catch(e=>say(e.message,"err"));
+$("btnOut").onclick=()=>msal.logoutRedirect({account});
+$("amt").oninput=()=>{const a=parseFloat($("amt").value);$("kind").textContent=a>0?kindOf(a):"—"};
+
+/* Compress image para mabilis at < 4MB */
+function compress(file){
+  return new Promise((res,rej)=>{
+    const img=new Image();img.onload=()=>{
+      const max=1600,s=Math.min(1,max/Math.max(img.width,img.height));
+      const c=document.createElement("canvas");c.width=img.width*s;c.height=img.height*s;
+      c.getContext("2d").drawImage(img,0,0,c.width,c.height);
+      c.toBlob(b=>b?res(b):rej(new Error("Compress failed")),"image/jpeg",0.8);
+    };img.onerror=()=>rej(new Error("Di mabasa ang image"));img.src=URL.createObjectURL(file);
+  });
+}
+/* PDF: diretso upload. Image: compress. Kung di mabasa (hal. HEIC sa Chrome), original na lang kung kasya */
+async function prepProof(file){
+  const MAX=4e6;
+  if(file.type==="application/pdf"){
+    if(file.size>MAX)throw new Error("Masyadong malaki ang PDF (max 4MB).");
+    return {blob:file,ext:"pdf",ct:"application/pdf"};
+  }
+  try{return {blob:await compress(file),ext:"jpg",ct:"image/jpeg"}}
+  catch{
+    if(file.size>MAX)throw new Error("Hindi mabasa ang image na ito. I-screenshot na lang ang resibo, tapos iyon ang i-upload.");
+    return {blob:file,ext:(file.name.split(".").pop()||"bin").toLowerCase(),ct:file.type||"application/octet-stream"};
+  }
+}
+const enc=p=>p.split("/").map(encodeURIComponent).join("/");
+const peso=n=>"₱"+Number(n).toLocaleString("en-PH",{minimumFractionDigits:2});
+const esc=s=>String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const num=v=>typeof v==="number"?v:Number(String(v).replace(/[^\d.-]/g,""))||0;
+/* Ginagawang date serial ng Excel ang "2026-10-30", kaya ibinabalik dito sa YYYY-MM-DD */
+const isoDate=v=>typeof v==="number"?new Date(Math.round((v-25569)*864e5)).toISOString().slice(0,10):String(v).replace(/^'/,"").trim();
+/* Tinatanggal ng Excel ang leading zeros (000123 → 123), kaya pareho ang trato */
+const normRef=v=>{const s=String(v??"").replace(/^'/,"").trim().toLowerCase();return /^\d+$/.test(s)?s.replace(/^0+(?=\d)/,""):s};
+const safeText=s=>/^[=+\-@]/.test(s)?"'"+s:s;
+
+const tUrl=t=>`/drives/${CFG.DRIVE_ID}/root:/${enc(CFG.WORKBOOK_PATH)}:/workbook/tables/${t}/rows`;
+async function addRow(table,row){await graph(tUrl(table)+"/add",json("POST",{values:[row]}))}
+async function sha256(file){
+  const b=await crypto.subtle.digest("SHA-256",await file.arrayBuffer());
+  return [...new Uint8Array(b)].map(x=>x.toString(16).padStart(2,"0")).join("");
+}
+const newId=d=>"EXP-"+d.replace(/-/g,"")+"-"+Math.random().toString(36).slice(2,6).toUpperCase();
+/* Lahat ng rows, paisa-isang 1,000 para walang limit. May index (i) para ma-PATCH ang mismong row */
+async function indexedRows(table){
+  const out=[];
+  for(let skip=0;;skip+=1000){
+    const d=await graph(tUrl(table)+`?$top=1000&$skip=${skip}`);
+    d.value.forEach((r,k)=>out.push({i:skip+k,v:r.values[0]}));
+    if(d.value.length<1000)return out;
+  }
+}
+async function tableRows(table){return (await indexedRows(table)).map(r=>r.v)}
+async function allRows(){return (await tableRows(CFG.TABLES.All)).filter(v=>v[C.id])}
+/* Approver email: galing sa Settings tab (Type | ApproverEmail), na ina-update ng admin sa hidden panel */
+async function getApprover(type){
+  try{
+    const d=await graph(tUrl(CFG.TABLES.Settings)+"?$top=50");
+    const hit=d.value.map(r=>r.values[0]).find(v=>v[0]===type&&String(v[1]).includes("@"));
+    return hit?String(hit[1]).trim().toLowerCase():"";
+  }catch(e){return ""}
+}
+
+/* ====== Tracker ====== */
+const trk=p=>`/drives/${CFG.TRACKER.DRIVE_ID}/items/${CFG.TRACKER.ITEM_ID}/workbook/worksheets('${encodeURIComponent(CFG.TRACKER.SHEET)}')${p}`;
+async function trackerSheet(){
+  const d=await graph(trk("/usedRange(valuesOnly=true)"));
+  const m=d.address.split("!").pop().match(/^\$?([A-Z]+)\$?(\d+)/);
+  if(!m||m[1]!=="A")throw new Error("Hindi inaasahan ang layout ng tracker ("+d.address+").");
+  const h=d.values.findIndex(r=>String(r[0]).trim()==="Expense No.");
+  if(h<0)throw new Error("Hindi makita ang header ng tracker (Expense No.).");
+  const head=d.values[h].slice(0,TRACKER_HEAD.length).map(x=>String(x).trim().toLowerCase());
+  if(TRACKER_HEAD.some((x,i)=>x.toLowerCase()!==head[i]))throw new Error("Nagbago ang columns ng tracker. Hindi muna nagsulat, sabihan ang admin.");
+  const rows=d.values.slice(h+1);
+  let last=rows.length-1;
+  while(last>=0&&rows[last][1]===""&&rows[last][4]==="")last--;
+  return {headRow:+m[2]+h,firstRow:+m[2]+h+1,rows,next:+m[2]+h+2+last};
+}
+
+/* Isusulat sa unang bakanteng row. Kapag may sabay na nagsulat sa parehong row, lilipat sa susunod */
+async function appendTracker(e){
+  const [y,mo,d]=e.date.split("-").map(Number);
+  for(let tryNo=0;tryNo<5;tryNo++){
+    const s=await trackerSheet(),r=s.next,addr=`A${r}:T${r}`;
+    const cur=(await graph(trk(`/range(address='${addr}')`))).values[0];
+    if(cur.some((x,i)=>x!==""&&i!==0&&i!==12&&i!==15))continue;
+    const f=[`="CE"&"-"&B${r}&M${r}`,`=DATE(${y},${mo},${d})`,e.type,e.part,e.amt,e.fund,e.proof,
+      CFG.TRACKER.DIVISION,CFG.TRACKER.DEPARTMENT,CFG.NEW_STATUS,safeText(e.desc),safeText(e.creative),
+      `=IF(E${r}="","",MAX($M$${s.headRow}:M${r-1})+1)`,"",CFG.TRACKER.REMARKS,`=TEXT(B${r},"yyyy")`,"","","",""];
+    await graph(trk(`/range(address='${addr}')`),json("PATCH",{formulas:[f]}));
+    await graph(trk(`/range(address='B${r}')`),json("PATCH",{numberFormat:[["m/d/yyyy"]]}));
+    await graph(trk(`/range(address='E${r}')`),json("PATCH",{numberFormat:[["#,##0.00"]]}));
+    const got=(await graph(trk(`/range(address='${addr}')`))).values[0];
+    if(String(got[10])===e.desc&&String(got[11])===e.creative)return {row:r,no:String(got[0])};
+  }
+  throw new Error("Hindi maisulat sa tracker, may sabay na nagsusulat. Subukan ulit maya-maya.");
+}
+
+$("submit").onclick=async()=>{
+  const date=$("date").value,type=$("type").value,part=$("part").value,branch=$("branch").value,
+        amt=Math.round(parseFloat($("amt").value)*100)/100,desc=$("desc").value.trim(),file=$("file").files[0];
+  const isTravel=part===TRAVEL,from=isTravel?$("from").value.trim():"",to=isTravel?$("to").value.trim():"",ride=isTravel?$("ride").value:"";
+  if(!date||!(amt>0)||!desc||!file)return say("Kumpletuhin lahat ng fields at mag-upload ng proof.","err");
+  if(isTravel&&(!from||!to))return say("Travel/Transportation ito, kaya ilagay kung saan galing (From) at saan pupunta (To).","err");
+  const btn=$("submit");btn.disabled=true;say("Chine-check ang resibo...");
+  let saved="";
+  try{
+    const name=account.name,email=account.username,fund=kindOf(amt);
+    const safe=name.replace(/[^A-Za-z0-9]/g,"");
+    const appr=await getApprover(fund);
+    const ref=$("ref").value.trim();
+    const hash=await sha256(file);
+    const existing=await allRows();
+    let id=newId(date);
+    while(existing.some(v=>v[C.id]===id))id=newId(date);
+
+    const sameFile=existing.find(v=>String(v[C.hash]).replace(/^'/,"")===hash);
+    if(sameFile)throw new Error("Na-upload na ang resibong ito dati ("+sameFile[C.id]+"). Hindi puwedeng i-submit ulit.");
+    const sameRef=ref&&existing.find(v=>normRef(v[C.ref])===normRef(ref));
+    if(sameRef)throw new Error("Ginamit na ang Reference no. na ito sa "+sameRef[C.id]+".");
+    const similar=existing.find(v=>String(v[C.email]).toLowerCase()===email.toLowerCase()&&isoDate(v[C.date])===date
+      &&v[C.fund]===fund&&v[C.type]===type&&v[C.part]===part&&num(v[C.amt])===amt);
+    if(similar&&!confirm("May kapareho nang expense ("+similar[C.id]+"): same araw, type, particular at amount.\nIba ba talaga itong resibo? Pindutin ang OK para ituloy."))
+      throw new Error("Na-cancel. Walang na-save.");
+
+    say("Ina-upload ang resibo...");
+    const proof=await prepProof(file);
+    const [yy,mm]=date.split("-");
+    const fname=`${fund==="Petty Cash"?"pettycash":"reimbursement"}-${date}-${safe}-${id}.${proof.ext}`;
+    const folder=`${CFG.PROOF_ROOT}/${yy}/${CFG.MONTH_FOLDERS[+mm-1]}`;
+    const up=await graph(`/drives/${CFG.DRIVE_ID}/root:/${enc(folder+"/"+fname)}:/content`,
+      {method:"PUT",headers:{"Content-Type":proof.ct},body:proof.blob});
+
+    say("Sinusulat sa Creatives tracker...");
+    /* Route muna sa DESCRIPTION, para mabasa ng OB Travel Form generator kahit tracker ang i-upload */
+    const trkDesc=isTravel?`From ${from} going to ${to} (${ride}) - ${desc}`:desc;
+    const t=await appendTracker({date,type,part,amt,fund,proof:up.webUrl,desc:trkDesc,creative:name.toUpperCase().trim()});
+    saved=`Nasa tracker na ito (${t.no}, row ${t.row}). Huwag nang i-submit ulit.`;
+
+    const ts=new Date().toLocaleString("sv-SE",{timeZone:"Asia/Manila"});
+    const row=[ts,name,email,date,fund,type,part,branch,amt,desc,up.webUrl,id,"'"+hash,ref?"'"+ref:"",appr,t.no,from,to,ride,"",up.id,CFG.STATUS.PENDING,""];
+
+    let obNote="";
+    if(isTravel){
+      say("Ginagawa ang OB Travel Form...");
+      const person={name,id:$("obId").value.trim(),department:$("obDept").value.trim(),superior:$("obSup").value.trim(),head:$("obHead").value.trim()};
+      try{
+        await saveProfile(person).catch(()=>{});
+        const ob=await makeOBForm([...existing,row],email,date,person);
+        row[19]=ob.url;
+        obNote=`\nOB Travel Form: ${ob.fname} (${ob.rides} ride, ${peso(ob.total)})`;
+      }catch(e){obNote="\nNa-save ang expense, pero hindi nagawa ang OB Travel Form: "+e.message}
+    }
+
+    say("Sinusulat sa log...");
+    await addRow(CFG.TABLES.All,row);
+    await addRow(CFG.TABLES[fund],row);
+
+    /* Pending Approval ng buong team sa log; bumababa ito kapag in-approve o ni-reject sa app */
+    const before=existing.filter(v=>v[C.fund]===fund&&String(v[C.status]).trim()===CFG.STATUS.PENDING).reduce((s,v)=>s+num(v[C.amt]),0);
+    const after=before+amt,limit=CFG.THRESHOLDS[fund];
+    let note="";
+    if(before<limit&&after>=limit&&!appr)note="\nWalang approver na naka-set, kaya walang email na naipadala. Sabihan ang admin.";
+    else if(before<limit&&after>=limit){
+      try{
+        await graph("/me/sendMail",json("POST",{
+          message:{
+            subject:`[Approval needed] ${fund} umabot na sa ${peso(limit)}`,
+            body:{contentType:"HTML",content:
+              `<p>Hi,</p><p>Umabot na sa threshold ang kabuuang pending <b>${fund}</b> ng lahat ng staff.</p>
+               <p>Running total: <b>${peso(after)}</b> (threshold: ${peso(limit)})</p>
+               <p>Pakibuksan ang <a href="${location.origin}">Expense Log app</a> para i-approve. Kusang gagawin ng app ang liquidation ZIP pagka-approve.</p>
+               <p>Expense: ${esc(t.no)} / ${esc(id)}<br>Huling nag-submit: ${esc(name)}<br>Latest proof: <a href="${up.webUrl}">${esc(fname)}</a></p>`},
+            toRecipients:[{emailAddress:{address:appr}}]
+          },saveToSentItems:true}));
+        note="\nNaipadala na ang approval request sa approver.";
+      }catch(e){note="\nNa-save, pero hindi naipadala ang email sa approver. Sabihan ang admin.\n("+e.message+")"}
+    }
+    say(`Saved! ${t.no} / ${id}\n${fund} ${peso(amt)} · ${type} · ${part}\nPending ${fund} (lahat ng staff): ${peso(after)}${obNote}${note}`,"ok");
+    $("amt").value="";$("desc").value="";$("ref").value="";$("file").value="";$("from").value="";$("to").value="";$("kind").textContent="—";
+  }catch(e){say(e.message+(saved?"\n\n"+saved:""),"err")}
+  btn.disabled=false;
+};
+/* Hidden admin: i-tap ang title ng 5 beses (loob ng 3 segundo). Gumagana lang kung ADMIN_EMAIL ang naka-login. */
+let taps=0,tapT;
+document.querySelector("h1").onclick=async()=>{
+  taps++;clearTimeout(tapT);tapT=setTimeout(()=>taps=0,3000);
+  if(taps<5)return;taps=0;
+  if(!account||account.username.toLowerCase()!==CFG.ADMIN_EMAIL.toLowerCase())return;
+  $("admin").style.display="block";
+  try{
+    const d=await graph(tUrl(CFG.TABLES.Settings)+"?$top=50");
+    d.value.forEach(r=>{const v=r.values[0];if(v[0]==="Petty Cash")$("apPetty").value=v[1];if(v[0]==="Reimbursement")$("apReimb").value=v[1]});
+  }catch(e){say(e.message,"err")}
+};
+$("apHide").onclick=()=>{$("admin").style.display="none"};
+$("apSave").onclick=async()=>{
+  const vals={"Petty Cash":$("apPetty").value.trim().toLowerCase(),"Reimbursement":$("apReimb").value.trim().toLowerCase()};
+  const dom=x=>x.split("@")[1];
+  for(const t in vals){
+    if(!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(vals[t]))return say("Maling email para sa "+t,"err");
+    if(dom(vals[t])!==dom(account.username.toLowerCase()))return say("Dapat EasyPC email ang approver ("+t+").","err");
+  }
+  try{
+    const cur=(await graph(tUrl(CFG.TABLES.Settings)+"?$top=50")).value.map(r=>r.values[0]);
+    for(const t in vals){
+      const i=cur.findIndex(v=>v[0]===t);
+      if(i>=0)await graph(tUrl(CFG.TABLES.Settings)+"/itemAt(index="+i+")",json("PATCH",{values:[[t,vals[t]]]}));
+      else await addRow(CFG.TABLES.Settings,[t,vals[t]]);
+    }
+    say("Na-save ang approver emails.","ok");
+  }catch(e){say(e.message,"err")}
+};
+/* ====== Approver: Approve → liquidation ZIP + For Processing. Reject → Rejected. Mano-mano ang Paid at ang transfer ====== */
+let apRows=[];
+async function loadApprover(){
+  try{
+    const me=account.username.toLowerCase(),funds=[];
+    for(const f of ["Petty Cash","Reimbursement"])if(await getApprover(f)===me)funds.push(f);
+    if(!funds.length)return;
+    fill("apFund",funds);$("approver").style.display="block";
+    $("apFund").onchange=renderPending;renderPending();
+  }catch(e){}
+}
+async function renderPending(){
+  const fund=$("apFund").value,box=$("apList");box.textContent="Kinukuha ang pending...";
+  try{
+    apRows=(await indexedRows(CFG.TABLES.All)).filter(r=>r.v[C.id]&&r.v[C.fund]===fund&&String(r.v[C.status]).trim()===CFG.STATUS.PENDING);
+    box.textContent="";
+    if(!apRows.length){box.textContent="Walang pending na "+fund+".";return}
+    apRows.forEach((r,k)=>{
+      const v=r.v,row=document.createElement("label");row.className="row";
+      const cb=document.createElement("input");cb.type="checkbox";cb.checked=true;cb.dataset.k=k;
+      const t=document.createElement("span");t.textContent=`${isoDate(v[C.date])} · ${v[C.name]} · ${v[C.part]} · ${peso(num(v[C.amt]))} · ${v[C.desc]} `;
+      const a=document.createElement("a");a.href=String(v[C.proof]);a.target="_blank";a.rel="noopener";a.textContent="resibo";
+      t.appendChild(a);row.append(cb,t);box.appendChild(row);
+    });
+    const tot=document.createElement("div");tot.style.marginTop="8px";
+    tot.textContent=`${apRows.length} pending · ${peso(apRows.reduce((s,r)=>s+num(r.v[C.amt]),0))}`;box.appendChild(tot);
+  }catch(e){box.textContent=e.message}
+}
+const picked=()=>[...$("apList").querySelectorAll("input:checked")].map(cb=>apRows[+cb.dataset.k]);
+async function graphBlob(path){
+  const t=await token();
+  const res=await fetch("https://graph.microsoft.com/v1.0"+path,{headers:{Authorization:"Bearer "+t}});
+  if(!res.ok)throw new Error("Graph "+res.status+": hindi makuha ang resibo.");
+  return res.blob();
+}
+const extOf=(type,url)=>({"image/jpeg":"jpg","image/png":"png","image/webp":"webp","image/heic":"heic","application/pdf":"pdf"})[type]
+  ||(url.split("?")[0].split(".").pop()||"jpg").toLowerCase();
+/* Lampas 4MB ang ZIP kadalasan, kaya upload session (paisa-isang ~3MB) */
+async function uploadLarge(path,bytes){
+  const s=await graph(`/drives/${CFG.DRIVE_ID}/root:/${enc(path)}:/createUploadSession`,json("POST",{item:{"@microsoft.graph.conflictBehavior":"rename"}}));
+  const CH=327680*10;let res;
+  for(let o=0;o<bytes.length;o+=CH){
+    const end=Math.min(o+CH,bytes.length);
+    res=await fetch(s.uploadUrl,{method:"PUT",headers:{"Content-Range":`bytes ${o}-${end-1}/${bytes.length}`},body:bytes.slice(o,end)});
+    if(!res.ok)throw new Error("Upload ng ZIP pumalya ("+res.status+").");
+  }
+  return res.json();
+}
+async function setStatus(ids,fund,status,batch){
+  for(const t of [CFG.TABLES.All,CFG.TABLES[fund]]){
+    for(const r of await indexedRows(t)){
+      if(!ids.includes(r.v[C.id]))continue;
+      const v=r.v.slice();v[C.status]=status;v[C.batch]=batch;
+      await graph(tUrl(t)+"/itemAt(index="+r.i+")",json("PATCH",{values:[v]}));
+    }
+  }
+}
+async function setTrackerStatus(nos,status){
+  const s=await trackerSheet();
+  for(let i=0;i<s.rows.length;i++){
+    if(nos.includes(String(s.rows[i][0]).trim()))
+      await graph(trk(`/range(address='J${s.firstRow+i}')`),json("PATCH",{values:[[status]]}));
+  }
+}
+$("apApprove").onclick=async()=>{
+  const fund=$("apFund").value,sel=picked();
+  if(!sel.length)return say("Walang naka-check.","err");
+  const sum=sel.reduce((s,r)=>s+num(r.v[C.amt]),0);
+  if(!confirm(`I-approve ang ${sel.length} ${fund} (${peso(sum)}) at gawin ang liquidation ZIP?`))return;
+  const btn=$("apApprove");btn.disabled=true;
+  try{
+    say("Kinukuha ang mga resibo...");
+    const people={};
+    (await tableRows(CFG.TABLES.People)).forEach(p=>{if(p[1])people[OBGen.nameKey(p[1])]={name:p[1],id:p[2]||"",department:p[3]||"",superior:p[4]||"",head:p[5]||""}});
+    const items=[];
+    for(const r of sel){
+      const v=r.v;let receipt=null;
+      if(v[C.proofId]){const b=await graphBlob(`/drives/${CFG.DRIVE_ID}/items/${v[C.proofId]}/content`);receipt={data:new Uint8Array(await b.arrayBuffer()),ext:extOf(b.type,String(v[C.proof]))}}
+      items.push({date:isoDate(v[C.date]),amount:num(v[C.amt]),desc:String(v[C.desc]),particular:v[C.part],name:String(v[C.name]),
+        expenseId:v[C.id],from:String(v[C.from]),to:String(v[C.to]),ride:String(v[C.ride]),receipt});
+    }
+    /* Sa folder ng month ng approval, gaya ng dati (hal. 2026/OCT/OCT REIMBURSEMENT LIQUIDATION 2026_3) */
+    const now=new Date(),yy=now.getFullYear(),mon=CFG.MONTH_FOLDERS[now.getMonth()],folder=`${CFG.PROOF_ROOT}/${yy}/${mon}`;
+    const names=await graph(`/drives/${CFG.DRIVE_ID}/root:/${enc(folder)}:/children?$select=name&$top=999`).then(d=>d.value.map(x=>x.name)).catch(()=>[]);
+    const batch=Liquidation.batchName(mon,fund,yy,names);
+    say("Ginagawa ang liquidation ZIP...");
+    const res=await Liquidation.build({XLSX,JSZip,OBGen},{fund,batch,approver:{name:account.name,email:account.username},approvedAt:now,people},items);
+    const up=await uploadLarge(`${folder}/${batch}.zip`,res.zip);
+    say("Tina-tag na For Processing...");
+    await setStatus(sel.map(r=>r.v[C.id]),fund,CFG.STATUS.APPROVED,batch);
+    await setTrackerStatus(sel.map(r=>String(r.v[C.trk]).trim()),CFG.TRACKER_STATUS.APPROVED).catch(e=>res.warnings.push("Hindi na-update ang Status sa tracker: "+e.message));
+    say(`Approved! ${res.count} expense · ${peso(res.total)}\nZIP: ${folder}/${up.name||batch+".zip"}${res.obForms?`\nKasama ang ${res.obForms} OB Travel Form`:""}`
+      +`${res.warnings.length?"\n\nPaalala:\n"+res.warnings.join("\n"):""}\n\nMano-mano pa rin ang pag-mark ng Paid at ang transfer sa mga nag-abono.`,"ok");
+    renderPending();
+  }catch(e){say(e.message,"err")}
+  btn.disabled=false;
+};
+$("apReject").onclick=async()=>{
+  const fund=$("apFund").value,sel=picked();
+  if(!sel.length)return say("Walang naka-check.","err");
+  if(!confirm(`I-reject ang ${sel.length} ${fund}?`))return;
+  try{
+    await setStatus(sel.map(r=>r.v[C.id]),fund,CFG.STATUS.REJECTED,"");
+    await setTrackerStatus(sel.map(r=>String(r.v[C.trk]).trim()),CFG.TRACKER_STATUS.REJECTED).catch(()=>{});
+    say(`Na-reject ang ${sel.length} expense.`,"ok");renderPending();
+  }catch(e){say(e.message,"err")}
+};
+init();
+</script>
+</body>
+</html>
