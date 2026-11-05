@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>EasyPC Expense Log</title>
-<script src="https://alcdn.msauth.net/browser/2.38.3/js/msal-browser.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@azure/msal-browser@2.38.3/lib/msal-browser.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script src="ob-form.js"></script>
@@ -121,7 +121,8 @@ let profile=null; // {index, values} ng OBPeople row ng naka-login
 /* Columns A–P ng tracker; chine-check bago magsulat para hindi tumama sa maling column */
 const TRACKER_HEAD=["Expense No.","Date","Type","Particular","Amount","Source of Fund","Link to Reference","Division","Department","Status","DESCRIPTION","Creative","number","BUDGET MONTH","REMARKS","YEAR"];
 
-const msal = new msalBrowser.PublicClientApplication({
+/* Ang library ay naka-load bilang window.msal (luma na ang alcdn.msauth.net, 404 na) */
+const msal = new window.msal.PublicClientApplication({
   auth:{clientId:CFG.CLIENT_ID,authority:"https://login.microsoftonline.com/"+CFG.TENANT_ID,redirectUri:location.origin},
   cache:{cacheLocation:"sessionStorage"}
 });
