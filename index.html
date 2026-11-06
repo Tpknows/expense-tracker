@@ -103,6 +103,7 @@ const CFG = {
   STATUS: {PENDING:"Pending Approval",APPROVED:"For Processing",REJECTED:"Rejected"}, // Status sa log; ang Paid ay mano-mano
   TRACKER_STATUS: {APPROVED:"For Processing",REJECTED:"Rejected"}, // ipapalit sa Status ng tracker pag in-approve o ni-reject
   THRESHOLDS: {"Petty Cash":5000,"Reimbursement":10000}, // total ng Pending Approval ng lahat ng staff sa log
+  SEND_EMAIL: false, // naka-off hangga't hindi pa approved ng IT ang Mail.Send; gawing true para bumalik ang auto-email
   PETTY_LIMIT: 1000,
   ADMIN_EMAIL: "PASTE-ADMIN-EMAIL@easypc.com.ph" // ikaw lang ang may access sa hidden admin panel
 };
@@ -126,7 +127,7 @@ const msal = new window.msal.PublicClientApplication({
   auth:{clientId:CFG.CLIENT_ID,authority:"https://login.microsoftonline.com/"+CFG.TENANT_ID,redirectUri:location.origin},
   cache:{cacheLocation:"sessionStorage"}
 });
-const SCOPES=["User.Read","Files.ReadWrite.All","Mail.Send"];
+const SCOPES=["User.Read","Files.ReadWrite.All"].concat(CFG.SEND_EMAIL?["Mail.Send"]:[]);
 const $=id=>document.getElementById(id);
 let account=null;
 
@@ -364,7 +365,8 @@ $("submit").onclick=async()=>{
     const before=existing.filter(v=>v[C.fund]===fund&&String(v[C.status]).trim()===CFG.STATUS.PENDING).reduce((s,v)=>s+num(v[C.amt]),0);
     const after=before+amt,limit=CFG.THRESHOLDS[fund];
     let note="";
-    if(before<limit&&after>=limit&&!appr)note="\nWalang approver na naka-set, kaya walang email na naipadala. Sabihan ang admin.";
+    if(before<limit&&after>=limit&&!CFG.SEND_EMAIL)note="\nUmabot na sa threshold ("+peso(limit)+"). Naka-off pa ang auto-email, kaya sabihan mo na lang ang approver.";
+    else if(before<limit&&after>=limit&&!appr)note="\nWalang approver na naka-set, kaya walang email na naipadala. Sabihan ang admin.";
     else if(before<limit&&after>=limit){
       try{
         await graph("/me/sendMail",json("POST",{
